@@ -36,7 +36,7 @@ int mousePosY;
 #define SIZE WINDOW_WIDTH*WINDOW_HEIGHT
 
 // The number of satellites can be changed to see how it affects performance.
-// Benchmarks must be run with the original number of satellites
+// Benchmarks must be run with the original number of satellites (default: 64)
 #define SATELLITE_COUNT 64
 
 // These are used to control the satellite movement
@@ -135,9 +135,7 @@ void parallelPhysicsEngine(){
    }
    int physicsUpdateIndex;
    // Physics iteration loop
-   for(physicsUpdateIndex = 0;
-       physicsUpdateIndex < PHYSICSUPDATESPERFRAME;
-      ++physicsUpdateIndex){
+   for(physicsUpdateIndex = 0; physicsUpdateIndex < PHYSICSUPDATESPERFRAME; ++physicsUpdateIndex) {
       int i;
        // Physics satellite loop
       for(i = 0; i < SATELLITE_COUNT; ++i){
