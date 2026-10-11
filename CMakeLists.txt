@@ -7,9 +7,10 @@ add_executable(parallel parallel.c)
 # Here is an example syntax how to add compiler options to your build process
 # See the project work document on compiler flag syntax on Linux and Windows
 
-# target_compile_options(parallel PRIVATE "-fopt-info-vec-optimized=vec_optimized.txt")
+target_compile_options(parallel PRIVATE "-fopt-info-vec-optimized=vec_optimized.txt")
 # target_compile_options(parallel PRIVATE "-fopt-info-vec-missed=vec_missed.txt")
-# target_compile_options(parallel PRIVATE "-ffast-math")
+target_compile_options(parallel PRIVATE "-ffast-math")
+target_compile_options(parallel PRIVATE "-O2")
 
 # Prerequisite for enabling OpenMP on macOS.
 # Assumes libomp is installed through Homebrew, feel free to modify.
