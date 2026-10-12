@@ -170,30 +170,13 @@ void parallelPhysicsEngine() {
 // ## You are asked to make this code parallel ##
 // Rendering loop (This is called once a frame after physics engine)
 // Decides the color for each pixel.
-// NOTE [7.2]: In this function, the primary issues stemmed from the inner First and Second graphics loops.
-//             They accessed satellite data each time from memory, which required strided access to its
-//             components. They were also unnecessarily computed each iteration, when it was guaranteed that
-//             data wouldn't change, since the physics pass occurs before the graphics pass. Furthermore, the
-//             function used costly the sqrt() function, which lasts many clock cycles and is done many times
-//             per frame, unnecessarily.
-//
-//             In order to address these issues, the required static data (like satellite identifiers, positions)
-//             was mapped to new arrays, which held the required values sequentially, hence removing the need for
-//             strided access, allowing for greater SIMD vectorization.
-//             In addition, an another optimization loop was added within the outer pixel loop, which computes
-//             the squared distances (skips the sqrt() function entirely) and weights, since they do not change
-//             during the course of the iteration. During the times, when
-//             squaredDistance < SATELLITE_RADIUS * SATELLITE_RADIUS, the pre-computation of the weights is unnecessary,
-//             but given that this state is a relatively rare condition, overall it improves the performance by being
-//             in a better vectorized loop.
-//             The weights sum calculation can also be moved to a better vectorized loop, but in testing it proved
-//             to be ~3ms slower (-02 -ffast-math), than being the way it is now.
 void parallelGraphicsEngine() {
+    // Current mouse position in the window.
     int tmpMousePosX = mousePosX;
     int tmpMousePosY = mousePosY;
 
-    // NEW [7.2]: Optimization loop which stores the required static values into sequential arrays, in order
-    //            to prevent repeated strided retrievals.
+    // [7.2] Optimization loop which stores the required static values into sequential arrays, in order
+    // to prevent repeated strided retrievals, which allows for easier auto-vectorization.
     float satelliteIdentifierRed[SATELLITE_COUNT];
     float satelliteIdentifierGreen[SATELLITE_COUNT];
     float satelliteIdentifierBlue[SATELLITE_COUNT];
@@ -207,18 +190,15 @@ void parallelGraphicsEngine() {
         satellitePositionY[j] = satellites[j].position.y;
     }
 
-    // Graphics pixel loop
-    int i;
-    for (i = 0; i < SIZE; ++i) {
-        // Row wise ordering
-        floatvector pixel = {.x = i % WINDOW_WIDTH, .y = i / WINDOW_WIDTH};
+    // Graphics pixel loop - iterates over each pixel in order to calculate its color.
+    for (int i = 0; i < SIZE; ++i) {
+        floatvector pixel = {.x = i % WINDOW_WIDTH, .y = i / WINDOW_WIDTH}; // Row wise ordering
 
         // Draw the black hole
         floatvector positionToBlackHole = {.x = pixel.x - tmpMousePosX, .y = pixel.y - tmpMousePosY};
         float distToBlackHoleSquared =
                 positionToBlackHole.x * positionToBlackHole.x +
                 positionToBlackHole.y * positionToBlackHole.y;
-        // EDIT [7.2]: Removed the costly sqrt()
         if (distToBlackHoleSquared < BLACK_HOLE_RADIUS * BLACK_HOLE_RADIUS) {
             pixels[i].red = 0;
             pixels[i].green = 0;
@@ -226,11 +206,10 @@ void parallelGraphicsEngine() {
             continue; // Black hole drawing done
         }
 
-        // This color is used for coloring the pixel
-        color_f32 renderColor = {.red = 0.f, .green = 0.f, .blue = 0.f};
+        color_f32 renderColor = {.red = 0.f, .green = 0.f, .blue = 0.f}; // This color is used for coloring the pixel
 
-        // NEW [7.2]: Optimization loop, which calculates the distances from the pixel to each satellite in order to
-        //            save on the costly sqrt() function and potential duplicate calculation.
+        // [7.2] Optimization loop, which calculates the distances from the pixel to each satellite in order to
+        // save on the costly sqrt() function and potential duplicate calculation.
         float squaredDistances[SATELLITE_COUNT];
         float computedWeights[SATELLITE_COUNT];
         float weights = 0.f;
@@ -244,32 +223,21 @@ void parallelGraphicsEngine() {
             computedWeights[j] = 1.0f / (distanceSquared * distanceSquared);
         }
 
-        // Find closest satellite
-        float shortestSquaredDistance = INFINITY;
+        float shortestSquaredDistance = INFINITY; // For finding the closest satellite to the current pixel.
+        int hitsSatellite = 0; // Is set to 1, if the pixel is within the satellite.
 
-        int hitsSatellite = 0;
-
-        // First Graphics satellite loop: Find the closest satellite.
-        int j;
-        for (j = 0; j < SATELLITE_COUNT; ++j) {
-            // EDIT [7.2]
-            // floatvector difference = {
-            //     .x = pixel.x - satellites[j].position.x,
-            //     .y = pixel.y - satellites[j].position.y
-            // };
-            // float distance = sqrt(difference.x * difference.x + difference.y * difference.y);
+        // First Graphics satellite loop: Finding the closest satellite to the current pixel.
+        for (int j = 0; j < SATELLITE_COUNT; ++j) {
             float squaredDistance = squaredDistances[j];
-
-            // if (distance < SATELLITE_RADIUS) {
+            // If the pixel is within the satellite, it is painted white.
             if (squaredDistance < SATELLITE_RADIUS * SATELLITE_RADIUS) {
                 renderColor.red = 1.0f;
                 renderColor.green = 1.0f;
                 renderColor.blue = 1.0f;
                 hitsSatellite = 1;
                 break;
-            } else {
-                // EDIT [7.2]
-                // float weight = 1.0f / (distance * distance * distance * distance);
+            } else // Else, the color is computed based on the satellites identifier.
+            {
                 weights += computedWeights[j];
                 if (squaredDistance < shortestSquaredDistance) {
                     shortestSquaredDistance = squaredDistance;
@@ -280,16 +248,9 @@ void parallelGraphicsEngine() {
             }
         }
 
-        // Second graphics loop: Calculate the color based on distance to every satellite. [pg-1]
+        // Second graphics loop: Calculate the color based on the distance to every satellite. [pg-1]
         if (!hitsSatellite) {
-            int k;
-            for (k = 0; k < SATELLITE_COUNT; ++k) {
-                // EDIT [7.2]
-                // floatvector difference = {
-                //     .x = pixel.x - satellites[k].position.x,
-                //     .y = pixel.y - satellites[k].position.y
-                // };
-                // float dist2 = (difference.x * difference.x + difference.y * difference.y);
+            for (int k = 0; k < SATELLITE_COUNT; ++k) {
                 float weight = computedWeights[k];
 
                 renderColor.red += (satelliteIdentifierRed[k] * weight / weights) * 3.0f;
@@ -297,6 +258,7 @@ void parallelGraphicsEngine() {
                 renderColor.blue += (satelliteIdentifierBlue[k] * weight / weights) * 3.0f;
             }
         }
+
         pixels[i].red = (uint8_t) (renderColor.red * 255.0f);
         pixels[i].green = (uint8_t) (renderColor.green * 255.0f);
         pixels[i].blue = (uint8_t) (renderColor.blue * 255.0f);
