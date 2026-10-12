@@ -104,30 +104,31 @@ void init() {
 // Physics engine loop. (This is called once a frame before graphics engine)
 // Moves the satellites based on gravity
 // This is done multiple times in a frame because the Euler integration
-// is not accurate enough to be done only once
+// is not accurate enough to be done only once per frame.
 void parallelPhysicsEngine() {
     int tmpMousePosX = mousePosX;
     int tmpMousePosY = mousePosY;
 
-    // double precision required for accumulation inside this routine,
+    // Double precision is required for accumulation inside this routine,
     // but float storage is ok outside these loops.
     doublevector tmpPosition[SATELLITE_COUNT];
     doublevector tmpVelocity[SATELLITE_COUNT];
 
-    int idx; // [pp-2]
-    for (idx = 0; idx < SATELLITE_COUNT; ++idx) {
+    // Conversion of satellite state from float to double for increased precision.
+    for (int idx = 0; idx < SATELLITE_COUNT; ++idx) { // [pp-2]
         tmpPosition[idx].x = satellites[idx].position.x;
         tmpPosition[idx].y = satellites[idx].position.y;
         tmpVelocity[idx].x = satellites[idx].velocity.x;
         tmpVelocity[idx].y = satellites[idx].velocity.y;
     }
-    int physicsUpdateIndex;
-    // Physics iteration loop
-    for (physicsUpdateIndex = 0; physicsUpdateIndex < PHYSICSUPDATESPERFRAME; ++physicsUpdateIndex) {
-        int i;
-        // Physics satellite loop
-        for (i = 0; i < SATELLITE_COUNT; ++i) {
-            // Distance to the blackhole (bit ugly code because C-struct cannot have member functions)
+
+    // Main Physics Iteration loop - here, for every physics update (many per frame) a new state is calculated
+    // for each satellite. The outer loop is responsible for PHYSICSUPDATESPERFRAME amount of new states
+    // for all satellites per iteration. Double precision is required here.
+    for (int physicsUpdateIndex = 0; physicsUpdateIndex < PHYSICSUPDATESPERFRAME; ++physicsUpdateIndex) {
+        // Physics Satellite Iteration loop - here, the next state of each satellite is computed.
+        for (int i = 0; i < SATELLITE_COUNT; ++i) {
+            // Distance to the Black Hole
             doublevector positionToBlackHole = {
                 .x = tmpPosition[i].x - tmpMousePosX,
                 .y = tmpPosition[i].y - tmpMousePosY
@@ -137,15 +138,14 @@ void parallelPhysicsEngine() {
                     positionToBlackHole.y * positionToBlackHole.y;
             double distToBlackHole = sqrt(distToBlackHoleSquared);
 
-            // Gravity force
+            // Gravity force calculation based on the distance to the Black Hole
             doublevector normalizedDirection = {
                 .x = positionToBlackHole.x / distToBlackHole,
                 .y = positionToBlackHole.y / distToBlackHole
             };
             double accumulation = GRAVITY / distToBlackHoleSquared;
 
-            // Delta time is used to make velocity same despite different FPS
-            // Update velocity based on force
+            // Update velocity based on force (Delta time is used to make velocity same despite different FPS)
             tmpVelocity[i].x -= accumulation * normalizedDirection.x * DELTATIME / PHYSICSUPDATESPERFRAME;
             tmpVelocity[i].y -= accumulation * normalizedDirection.y * DELTATIME / PHYSICSUPDATESPERFRAME;
 
@@ -155,11 +155,8 @@ void parallelPhysicsEngine() {
         }
     }
 
-    // double precision required for accumulation inside this routine,
-    // but float storage is ok outside these loops.
-    // copy back the float storage. [pp-1]
-    int idx2;
-    for (idx2 = 0; idx2 < SATELLITE_COUNT; ++idx2) {
+    // Convert the final states back to floats and store them. [pp-1]
+    for (int idx2 = 0; idx2 < SATELLITE_COUNT; ++idx2) {
         satellites[idx2].position.x = tmpPosition[idx2].x;
         satellites[idx2].position.y = tmpPosition[idx2].y;
         satellites[idx2].velocity.x = tmpVelocity[idx2].x;
