@@ -96,7 +96,7 @@ satellite *backupSatelites;
 // ## You may add your own variables here ##
 #define PHYSICS_THREAD_COUNT 6
 #define GRAPHICS_THREAD_COUNT 6
-#define BLOCK 16
+#define BLOCK 8
 #if SATELLITE_COUNT % BLOCK != 0
 #error "SATELLITE_COUNT must be divisible by BLOCK"
 #endif
