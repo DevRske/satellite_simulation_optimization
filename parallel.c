@@ -212,6 +212,7 @@ void parallelGraphicsEngine() {
 
         // [7.2] Optimization loop, which calculates the distances from the pixel to each satellite in order to
         // save on the costly sqrt() function and potential duplicate calculation.
+        // [7.2.1] Moved weight computation to a better vectorized loop, which has no conditional branches.
         float squaredDistances[SATELLITE_COUNT];
         float computedWeights[SATELLITE_COUNT];
         float weights = 0.f;
@@ -223,35 +224,40 @@ void parallelGraphicsEngine() {
             float distanceSquared = (difference.x * difference.x + difference.y * difference.y);
             squaredDistances[j] = distanceSquared;
             computedWeights[j] = 1.0f / (distanceSquared * distanceSquared);
+            weights += computedWeights[j];
         }
 
         float shortestSquaredDistance = INFINITY; // For finding the closest satellite to the current pixel.
-        int hitsSatellite = 0; // Is set to 1, if the pixel is within the satellite.
+        //int hitsSatellite = 0; // Is set to 1, if the pixel is within the satellite.
+        int closestSatelliteIndex = 0;
 
         // First Graphics satellite loop: Finding the closest satellite to the current pixel.
+        // [7.2.1] Reduced the scope of the loop. Now it is only responsible for finding the closest
+        // satellite instead of also deciding on its color. This was done, because we know that if
+        // the pixel is within any satellite - it will be the closest one, thus we know that its color
+        // will be white. This comes at the occasional cost of unnecessarily computing weights, but
+        // given the amount of pixels which need them is vastly larger, the better vectorized loop
+        // offers some performance benefit - graphics frame times reduced from 151ms to 113ms (-O2 -ffast-math).
         for (int j = 0; j < SATELLITE_COUNT; ++j) {
             float squaredDistance = squaredDistances[j];
-            // If the pixel is within the satellite, it is painted white.
-            if (squaredDistance < SATELLITE_RADIUS * SATELLITE_RADIUS) {
-                renderColor.red = 1.0f;
-                renderColor.green = 1.0f;
-                renderColor.blue = 1.0f;
-                hitsSatellite = 1;
-                break;
-            } else // Else, the color is computed based on the satellites identifier.
-            {
-                weights += computedWeights[j];
-                if (squaredDistance < shortestSquaredDistance) {
-                    shortestSquaredDistance = squaredDistance;
-                    renderColor.red = satelliteIdentifierRed[j];
-                    renderColor.green = satelliteIdentifierGreen[j];
-                    renderColor.blue = satelliteIdentifierBlue[j];
-                }
-            }
+
+            int closerThanClosest = squaredDistance < shortestSquaredDistance;
+            shortestSquaredDistance = closerThanClosest ? squaredDistance : shortestSquaredDistance;
+            closestSatelliteIndex = closerThanClosest ? j : closestSatelliteIndex;
         }
 
-        // Second graphics loop: Calculate the color based on the distance to every satellite. [pg-1]
-        if (!hitsSatellite) {
+        // If the pixel is within the satellite, it is painted white.
+        if (shortestSquaredDistance < SATELLITE_RADIUS * SATELLITE_RADIUS) {
+            renderColor.red = 1.0f;
+            renderColor.green = 1.0f;
+            renderColor.blue = 1.0f;
+        } else // Else, the color is computed based on the satellites identifier.
+        {
+            renderColor.red = satelliteIdentifierRed[closestSatelliteIndex];
+            renderColor.green = satelliteIdentifierGreen[closestSatelliteIndex];
+            renderColor.blue = satelliteIdentifierBlue[closestSatelliteIndex];
+
+            // Second graphics loop: Calculate the color based on the distance to every satellite. [pg-1]
             for (int k = 0; k < SATELLITE_COUNT; ++k) {
                 float weight = computedWeights[k];
 
