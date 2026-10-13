@@ -27,8 +27,9 @@ target_compile_options(parallel PRIVATE "-O2")
 # endif()
 #
 # UNCOMMENT THESE TO ENABLE OPENMP
-# find_package(OpenMP REQUIRED)
-# target_link_libraries(parallel OpenMP::OpenMP_C)
+find_package(OpenMP REQUIRED)
+target_link_libraries(parallel OpenMP::OpenMP_C)
+target_link_options(parallel PRIVATE -fopenmp)
 
 
 # UNCOMMENT THESE TO ENABLE OPENCL

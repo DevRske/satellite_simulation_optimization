@@ -193,6 +193,8 @@ void parallelGraphicsEngine() {
     }
 
     // Graphics pixel loop - iterates over each pixel in order to calculate its color.
+    // [7.4] Implemented OpenMP multi-threading to the Graphics pixel loop.
+    #pragma omp parallel for num_threads(6)
     for (int i = 0; i < SIZE; ++i) {
         floatvector pixel = {.x = i % WINDOW_WIDTH, .y = i / WINDOW_WIDTH}; // Row wise ordering
 
@@ -228,7 +230,6 @@ void parallelGraphicsEngine() {
         }
 
         float shortestSquaredDistance = INFINITY; // For finding the closest satellite to the current pixel.
-        //int hitsSatellite = 0; // Is set to 1, if the pixel is within the satellite.
         int closestSatelliteIndex = 0;
 
         // First Graphics satellite loop: Finding the closest satellite to the current pixel.
