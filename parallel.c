@@ -111,56 +111,61 @@ void parallelPhysicsEngine() {
 
     // Double precision is required for accumulation inside this routine,
     // but float storage is ok outside these loops.
-    doublevector tmpPosition[SATELLITE_COUNT];
-    doublevector tmpVelocity[SATELLITE_COUNT];
+    // [7.2] Replaced the previously used doublevector structure with one array per field (structure of arrays)
+    // in order to have each field be in sequential memory locations and not require shuffling, given it is
+    // accessed frequently during each Main Physics loop iteration. Physics frame time was reduced from 26ms to 17ms
+    // using -O2 -ffast-math, while still passing the physics check.
+    double tmpPosX[SATELLITE_COUNT];
+    double tmpPosY[SATELLITE_COUNT];
+    double tmpVelX[SATELLITE_COUNT];
+    double tmpVelY[SATELLITE_COUNT];
 
     // Conversion of satellite state from float to double for increased precision.
     for (int idx = 0; idx < SATELLITE_COUNT; ++idx) { // [pp-2]
-        tmpPosition[idx].x = satellites[idx].position.x;
-        tmpPosition[idx].y = satellites[idx].position.y;
-        tmpVelocity[idx].x = satellites[idx].velocity.x;
-        tmpVelocity[idx].y = satellites[idx].velocity.y;
+        tmpPosX[idx] = satellites[idx].position.x;
+        tmpPosY[idx] = satellites[idx].position.y;
+        tmpVelX[idx] = satellites[idx].velocity.x;
+        tmpVelY[idx] = satellites[idx].velocity.y;
     }
 
     // Main Physics Iteration loop - here, for every physics update (many per frame) a new state is calculated
-    // for each satellite. The outer loop is responsible for PHYSICSUPDATESPERFRAME amount of new states
-    // for all satellites per iteration. Double precision is required here.
+    // for each satellite. The outer loop in each iteration is responsible for calculating one of new state
+    // per satellite. Double precision is required here.
     for (int physicsUpdateIndex = 0; physicsUpdateIndex < PHYSICSUPDATESPERFRAME; ++physicsUpdateIndex) {
         // Physics Satellite Iteration loop - here, the next state of each satellite is computed.
         for (int i = 0; i < SATELLITE_COUNT; ++i) {
             // Distance to the Black Hole
-            doublevector positionToBlackHole = {
-                .x = tmpPosition[i].x - tmpMousePosX,
-                .y = tmpPosition[i].y - tmpMousePosY
-            };
+            // [7.2] Splitting the local doublevector temporary values (positionToBlackHole and normalizedDirection)
+            // into seperate doubles gave no speedup as they are local temporary values (not arrays), so they stay
+            // in registers and not get stored in memory as arrays are. This means that their layout does not matter.
+            double positionToBlackHoleX = tmpPosX[i] - tmpMousePosX;
+            double positionToBlackHoleY = tmpPosY[i] - tmpMousePosY;
             double distToBlackHoleSquared =
-                    positionToBlackHole.x * positionToBlackHole.x +
-                    positionToBlackHole.y * positionToBlackHole.y;
+                    positionToBlackHoleX * positionToBlackHoleX +
+                    positionToBlackHoleY * positionToBlackHoleY;
             double distToBlackHole = sqrt(distToBlackHoleSquared);
 
             // Gravity force calculation based on the distance to the Black Hole
-            doublevector normalizedDirection = {
-                .x = positionToBlackHole.x / distToBlackHole,
-                .y = positionToBlackHole.y / distToBlackHole
-            };
+            double normalizedDirectionX = positionToBlackHoleX / distToBlackHole;
+            double normalizedDirectionY = positionToBlackHoleY / distToBlackHole;
             double accumulation = GRAVITY / distToBlackHoleSquared;
 
             // Update velocity based on force (Delta time is used to make velocity same despite different FPS)
-            tmpVelocity[i].x -= accumulation * normalizedDirection.x * DELTATIME / PHYSICSUPDATESPERFRAME;
-            tmpVelocity[i].y -= accumulation * normalizedDirection.y * DELTATIME / PHYSICSUPDATESPERFRAME;
+            tmpVelX[i] -= accumulation * normalizedDirectionX * DELTATIME / PHYSICSUPDATESPERFRAME;
+            tmpVelY[i] -= accumulation * normalizedDirectionY * DELTATIME / PHYSICSUPDATESPERFRAME;
 
             // Update position based on velocity
-            tmpPosition[i].x += tmpVelocity[i].x * DELTATIME / PHYSICSUPDATESPERFRAME;
-            tmpPosition[i].y += tmpVelocity[i].y * DELTATIME / PHYSICSUPDATESPERFRAME;
+            tmpPosX[i] += tmpVelX[i] * DELTATIME / PHYSICSUPDATESPERFRAME;
+            tmpPosY[i] += tmpVelY[i] * DELTATIME / PHYSICSUPDATESPERFRAME;
         }
     }
 
     // Convert the final states back to floats and store them. [pp-1]
     for (int idx2 = 0; idx2 < SATELLITE_COUNT; ++idx2) {
-        satellites[idx2].position.x = tmpPosition[idx2].x;
-        satellites[idx2].position.y = tmpPosition[idx2].y;
-        satellites[idx2].velocity.x = tmpVelocity[idx2].x;
-        satellites[idx2].velocity.y = tmpVelocity[idx2].y;
+        satellites[idx2].position.x = tmpPosX[idx2];
+        satellites[idx2].position.y = tmpPosY[idx2];
+        satellites[idx2].velocity.x = tmpVelX[idx2];
+        satellites[idx2].velocity.y = tmpVelY[idx2];
     }
 }
 
