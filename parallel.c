@@ -94,7 +94,12 @@ satellite *backupSatelites;
 
 
 // ## You may add your own variables here ##
-
+#define PHYSICS_THREAD_COUNT 6
+#define GRAPHICS_THREAD_COUNT 6
+#define BLOCK 16
+#if SATELLITE_COUNT % BLOCK != 0
+#error "SATELLITE_COUNT must be divisible by BLOCK"
+#endif
 
 // ## You may add your own initialization routines here ##
 void init() {
@@ -128,35 +133,63 @@ void parallelPhysicsEngine() {
         tmpVelY[idx] = satellites[idx].velocity.y;
     }
 
-    // Main Physics Iteration loop - here, for every physics update (many per frame) a new state is calculated
-    // for each satellite. The outer loop in each iteration is responsible for calculating one of new state
-    // per satellite. Double precision is required here.
-    for (int physicsUpdateIndex = 0; physicsUpdateIndex < PHYSICSUPDATESPERFRAME; ++physicsUpdateIndex) {
-        // Physics Satellite Iteration loop - here, the next state of each satellite is computed.
-        for (int i = 0; i < SATELLITE_COUNT; ++i) {
-            // Distance to the Black Hole
-            // [7.2] Splitting the local doublevector temporary values (positionToBlackHole and normalizedDirection)
-            // into seperate doubles gave no speedup as they are local temporary values (not arrays), so they stay
-            // in registers and not get stored in memory as arrays are. This means that their layout does not matter.
-            double positionToBlackHoleX = tmpPosX[i] - tmpMousePosX;
-            double positionToBlackHoleY = tmpPosY[i] - tmpMousePosY;
-            double distToBlackHoleSquared =
-                    positionToBlackHoleX * positionToBlackHoleX +
-                    positionToBlackHoleY * positionToBlackHoleY;
-            double distToBlackHole = sqrt(distToBlackHoleSquared);
+    // [7.4] Implemented OpenMP Multi-Threading to the physics loop. Instead of the initial proposal of
+    // performing a plain loop interchange (which did not give a positive improvement, 17ms to 20ms on -O2 -ffast-math),
+    // all satellites are being divided into equally sized blocks (block size defined as BLOCK above in code) and
+    // distributed among different threads running the same version of the Main Physics Iteration loop. The BlOCK size
+    // was chosen after simple performance testing.
+    #pragma omp parallel for num_threads(PHYSICS_THREAD_COUNT)
+    for (int i = 0; i < SATELLITE_COUNT; i += BLOCK) {
+        // [7.4] This is where the satellite positions are distributed into blocks. This is done in order to ensure
+        // the compiler that the arrays do not overlap (there is no aliasing), since these arrays are declared inside
+        // the parallel block, the compiler can be confident about that they don't alias, or that no-one modifies them
+        // from the outside. Currently this is the expectation. The code was not tested without the new structure
+        // of arrays.
+        double px[BLOCK], py[BLOCK], vx[BLOCK], vy[BLOCK];
+        for (int k = 0; k < BLOCK; ++k) {
+            px[k] = tmpPosX[i + k];
+            py[k] = tmpPosY[i + k];
+            vx[k] = tmpVelX[i + k];
+            vy[k] = tmpVelY[i + k];
+        }
 
-            // Gravity force calculation based on the distance to the Black Hole
-            double normalizedDirectionX = positionToBlackHoleX / distToBlackHole;
-            double normalizedDirectionY = positionToBlackHoleY / distToBlackHole;
-            double accumulation = GRAVITY / distToBlackHoleSquared;
+        // Main Physics Iteration loop - here, for every physics update (many per frame) a new state is calculated
+        // for each satellite in the block. The outer loop in each iteration is responsible for calculating
+        // one of new state per satellite in the block. Double precision is required here.
+        for (int physicsUpdateIndex = 0; physicsUpdateIndex < PHYSICSUPDATESPERFRAME; ++physicsUpdateIndex) {
+            // Physics Satellite Iteration loop - here, the next state of each satellite in this block is computed.
+            for (int k = 0; k < BLOCK; ++k) {
+                // Distance to the Black Hole
+                // [7.2] Splitting the local doublevector temporary values (positionToBlackHole and normalizedDirection)
+                // into seperate doubles gave no speedup as they are local temporary values (not arrays), so they stay
+                // in registers and not get stored in memory as arrays are. This means that their layout does not matter.
+                double positionToBlackHoleX = px[k] - tmpMousePosX;
+                double positionToBlackHoleY = py[k] - tmpMousePosY;
+                double distToBlackHoleSquared =
+                        positionToBlackHoleX * positionToBlackHoleX +
+                        positionToBlackHoleY * positionToBlackHoleY;
+                double distToBlackHole = sqrt(distToBlackHoleSquared);
 
-            // Update velocity based on force (Delta time is used to make velocity same despite different FPS)
-            tmpVelX[i] -= accumulation * normalizedDirectionX * DELTATIME / PHYSICSUPDATESPERFRAME;
-            tmpVelY[i] -= accumulation * normalizedDirectionY * DELTATIME / PHYSICSUPDATESPERFRAME;
+                // Gravity force calculation based on the distance to the Black Hole
+                double normalizedDirectionX = positionToBlackHoleX / distToBlackHole;
+                double normalizedDirectionY = positionToBlackHoleY / distToBlackHole;
+                double accumulation = GRAVITY / distToBlackHoleSquared;
 
-            // Update position based on velocity
-            tmpPosX[i] += tmpVelX[i] * DELTATIME / PHYSICSUPDATESPERFRAME;
-            tmpPosY[i] += tmpVelY[i] * DELTATIME / PHYSICSUPDATESPERFRAME;
+                // Update velocity based on force (Delta time is used to make velocity same despite different FPS)
+                vx[k] -= accumulation * normalizedDirectionX * DELTATIME / PHYSICSUPDATESPERFRAME;
+                vy[k] -= accumulation * normalizedDirectionY * DELTATIME / PHYSICSUPDATESPERFRAME;
+
+                // Update position based on velocity
+                px[k] += vx[k] * DELTATIME / PHYSICSUPDATESPERFRAME;
+                py[k] += vy[k] * DELTATIME / PHYSICSUPDATESPERFRAME;
+            }
+        }
+
+        for (int k = 0; k < BLOCK; ++k) {
+            tmpPosX[i + k] = px[k];
+            tmpPosY[i + k] = py[k];
+            tmpVelX[i + k] = vx[k];
+            tmpVelY[i + k] = vy[k];
         }
     }
 
@@ -194,7 +227,7 @@ void parallelGraphicsEngine() {
 
     // Graphics pixel loop - iterates over each pixel in order to calculate its color.
     // [7.4] Implemented OpenMP multi-threading to the Graphics pixel loop.
-    #pragma omp parallel for num_threads(6)
+    #pragma omp parallel for num_threads(GRAPHICS_THREAD_COUNT)
     for (int i = 0; i < SIZE; ++i) {
         floatvector pixel = {.x = i % WINDOW_WIDTH, .y = i / WINDOW_WIDTH}; // Row wise ordering
 
