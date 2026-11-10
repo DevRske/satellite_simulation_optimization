@@ -40,15 +40,15 @@ target_link_options(parallel PRIVATE -fopenmp)
 # to the build directory. If you know enough CMake magic, feel free to fix this and let me know.
 # Note, that the build seems to fail (at least on Visual Studio) if parallel.cl does not exist.
 #
-# find_package(OpenCL REQUIRED)
-# target_include_directories(parallel PRIVATE ${OpenCL_INCLUDE_DIRS})
-# target_link_libraries(parallel ${OpenCL_LIBRARIES})
-# add_custom_command(
-#     TARGET parallel POST_BUILD
-#     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-#     "${CMAKE_SOURCE_DIR}/parallel.cl"
-#     $<TARGET_FILE_DIR:parallel>
-#     VERBATIM)
+ find_package(OpenCL REQUIRED)
+ target_include_directories(parallel PRIVATE ${OpenCL_INCLUDE_DIRS})
+ target_link_libraries(parallel ${OpenCL_LIBRARIES})
+ add_custom_command(
+     TARGET parallel POST_BUILD
+     COMMAND ${CMAKE_COMMAND} -E copy_if_different
+     "${CMAKE_SOURCE_DIR}/parallel.cl"
+     $<TARGET_FILE_DIR:parallel>
+     VERBATIM)
 
 
 # Find and link SDL2

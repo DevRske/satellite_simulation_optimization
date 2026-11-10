@@ -94,9 +94,14 @@ satellite *backupSatelites;
 
 
 // ## You may add your own variables here ##
+#define CL_TARGET_OPENCL_VERSION 120
+#include <CL/cl.h>
+#define CHECK(err, cause) if ((err) != CL_SUCCESS) { printf("%s failed: %d\n", cause, err); exit(1); }
+cl_int err;
+
 #define PHYSICS_THREAD_COUNT 6
 #define GRAPHICS_THREAD_COUNT 6
-#define BLOCK 8
+#define BLOCK 16
 #if SATELLITE_COUNT % BLOCK != 0
 #error "SATELLITE_COUNT must be divisible by BLOCK"
 #endif
