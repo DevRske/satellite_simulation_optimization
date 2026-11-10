@@ -98,6 +98,19 @@ satellite *backupSatelites;
 #include <CL/cl.h>
 #define CHECK(err, cause) if ((err) != CL_SUCCESS) { printf("%s failed: %d\n", cause, err); exit(1); }
 cl_int err;
+cl_platform_id platform;
+cl_device_id device;
+cl_context context;
+cl_command_queue queue;
+cl_program program;
+cl_kernel kernel;
+
+cl_mem pixelsBuffer;
+cl_mem satPosXBuffer;
+cl_mem satPosYBuffer;
+cl_mem satIdRedBuffer;
+cl_mem satIdGreenBuffer;
+cl_mem satIdBlueBuffer;
 
 #define PHYSICS_THREAD_COUNT 6
 #define GRAPHICS_THREAD_COUNT 6
@@ -108,6 +121,74 @@ cl_int err;
 
 // ## You may add your own initialization routines here ##
 void init() {
+    // Selecting the correct OpenCL Platform
+    err = clGetPlatformIDs(1, &platform, NULL);
+    CHECK(err, "platform")
+
+    // Selecting a GPU device for OpenCL to use
+    err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 1, &device, NULL);
+    CHECK(err, "device")
+    char device_name[128];
+    clGetDeviceInfo(device, CL_DEVICE_NAME, sizeof(device_name), &device_name, NULL);
+    printf("%s\n", device_name);
+
+    // Initializing the OpenCL context for the selected device
+    context = clCreateContext(NULL, 1, &device, NULL, NULL, &err);
+    CHECK(err, "context")
+
+    // Initializing the command queue for the device and context
+    queue = clCreateCommandQueue(context, device, 0, &err);
+    CHECK(err, "queue")
+
+    // Initializing the program object with the source code
+    FILE *f = fopen("parallel.cl", "rb");
+    if (f == NULL) { printf("Unable to open file\n"); exit(1); }
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    rewind(f);
+    char *source = malloc(size + 1);
+    fread(source, 1, size, f);
+    source[size] = '\0';
+    fclose(f);
+    const char *src = source;
+    program = clCreateProgramWithSource(context, 1, &src, NULL, &err);
+    free(source); // The source buffer is no longer required, as the program made a copy
+    CHECK(err, "program")
+
+    // Compile the program for the selected device
+    char options[256];
+    snprintf(options, sizeof(options),
+        "-D WINDOW_WIDTH=%d -D SATELLITE_COUNT=%d -D SATELLITE_RADIUS=%ff -D BLACK_HOLE_RADIUS=%ff",
+        WINDOW_WIDTH, SATELLITE_COUNT, SATELLITE_RADIUS, BLACK_HOLE_RADIUS);
+    err = clBuildProgram(program, 1, &device, options, NULL, NULL);
+    if (err != CL_SUCCESS) { // Different error handling process in order to report build log in case of failed build
+        size_t logSize;
+        clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, NULL, &logSize);
+        char *buildLog = (char *)malloc(logSize);
+        clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, logSize, buildLog, NULL);
+        printf("%s\n", buildLog);
+        free(buildLog);
+        exit(1);
+    }
+    // Selection of the kernel from the compiled program
+    kernel = clCreateKernel(program, "graphics", &err); // Placeholder name so far
+    CHECK(err, "kernel")
+
+    // Creation of buffers
+    size_t bufferSize = SIZE * sizeof(color_u8);
+    pixelsBuffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, bufferSize, NULL, &err);
+    CHECK(err, "pixelsBuffer");
+    bufferSize = SATELLITE_COUNT * sizeof(float);
+    satPosXBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, bufferSize, NULL, &err);
+    CHECK(err, "satPosXBuffer");
+    satPosYBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, bufferSize, NULL, &err);
+    CHECK(err, "satPosYBuffer");
+    satIdRedBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, bufferSize, NULL, &err);
+    CHECK(err, "satIdRedBuffer");
+    satIdGreenBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, bufferSize, NULL, &err);
+    CHECK(err, "satIdGreenBuffer");
+    satIdBlueBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, bufferSize, NULL, &err);
+    CHECK(err, "satIdBlueBuffer");
 }
 
 // ## You are asked to make this code parallel ##
@@ -231,8 +312,6 @@ void parallelGraphicsEngine() {
     }
 
     // Graphics pixel loop - iterates over each pixel in order to calculate its color.
-    // [7.4] Implemented OpenMP multi-threading to the Graphics pixel loop.
-    #pragma omp parallel for num_threads(GRAPHICS_THREAD_COUNT)
     for (int i = 0; i < SIZE; ++i) {
         floatvector pixel = {.x = i % WINDOW_WIDTH, .y = i / WINDOW_WIDTH}; // Row wise ordering
 
