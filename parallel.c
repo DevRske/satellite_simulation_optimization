@@ -371,8 +371,6 @@ void parallelGraphicsEngine() {
 void destroy() {
     err = clFinish(queue);
     CHECK(err, "finish");
-    err = clReleaseContext(context);
-    CHECK(err, "release context");
     err = clReleaseKernel(kernel);
     CHECK(err, "release kernel");
     err = clReleaseProgram(program);
@@ -391,6 +389,8 @@ void destroy() {
     CHECK(err, "release buffer satIdGreen");
     err = clReleaseMemObject(satIdBlueBuffer);
     CHECK(err, "release buffer satIdBlue");
+    err = clReleaseContext(context);
+    CHECK(err, "release context");
 }
 
 
