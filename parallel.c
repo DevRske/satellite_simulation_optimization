@@ -97,6 +97,8 @@ satellite *backupSatelites;
 #define CL_TARGET_OPENCL_VERSION 120
 #include <CL/cl.h>
 #define CHECK(err, cause) if ((err) != CL_SUCCESS) { printf("%s failed: %d\n", cause, err); exit(1); }
+#define LOCAL_GROUP_DIM_SIZE_X 8
+#define LOCAL_GROUP_DIM_SIZE_Y 8
 cl_int err;
 cl_platform_id platform;
 cl_device_id device;
@@ -113,7 +115,6 @@ cl_mem satIdGreenBuffer;
 cl_mem satIdBlueBuffer;
 
 #define PHYSICS_THREAD_COUNT 6
-#define GRAPHICS_THREAD_COUNT 6
 #define BLOCK 16
 #if SATELLITE_COUNT % BLOCK != 0
 #error "SATELLITE_COUNT must be divisible by BLOCK"
@@ -189,6 +190,39 @@ void init() {
     CHECK(err, "satIdGreenBuffer");
     satIdBlueBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, bufferSize, NULL, &err);
     CHECK(err, "satIdBlueBuffer");
+
+    // These values do not change per frame, so they are enqueued only once
+    float satelliteIdentifierRed[SATELLITE_COUNT];
+    float satelliteIdentifierGreen[SATELLITE_COUNT];
+    float satelliteIdentifierBlue[SATELLITE_COUNT];
+    for (int j = 0; j < SATELLITE_COUNT; ++j) {
+        satelliteIdentifierRed[j] = satellites[j].identifier.red;
+        satelliteIdentifierGreen[j] = satellites[j].identifier.green;
+        satelliteIdentifierBlue[j] = satellites[j].identifier.blue;
+    }
+    err = clEnqueueWriteBuffer(queue, satIdRedBuffer, CL_TRUE, 0,
+    SATELLITE_COUNT * sizeof(float), satelliteIdentifierRed, 0, NULL, NULL);
+    CHECK(err, "buffer satIdRed");
+    err = clEnqueueWriteBuffer(queue, satIdGreenBuffer, CL_TRUE, 0,
+        SATELLITE_COUNT * sizeof(float), satelliteIdentifierGreen, 0, NULL, NULL);
+    CHECK(err, "buffer satIdGreen");
+    err = clEnqueueWriteBuffer(queue, satIdBlueBuffer, CL_TRUE, 0,
+        SATELLITE_COUNT * sizeof(float), satelliteIdentifierBlue, 0, NULL, NULL);
+    CHECK(err, "buffer satIdBlue");
+
+    // Setting up the kernel arguments
+    err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &pixelsBuffer);
+    CHECK(err, "set arg 0");
+    err = clSetKernelArg(kernel, 1, sizeof(cl_mem), &satPosXBuffer);
+    CHECK(err, "set arg 1");
+    err = clSetKernelArg(kernel, 2, sizeof(cl_mem), &satPosYBuffer);
+    CHECK(err, "set arg 2");
+    err = clSetKernelArg(kernel, 3, sizeof(cl_mem), &satIdRedBuffer);
+    CHECK(err, "set arg 3");
+    err = clSetKernelArg(kernel, 4, sizeof(cl_mem), &satIdGreenBuffer);
+    CHECK(err, "set arg 4");
+    err = clSetKernelArg(kernel, 5, sizeof(cl_mem), &satIdBlueBuffer);
+    CHECK(err, "set arg 5");
 }
 
 // ## You are asked to make this code parallel ##
@@ -298,101 +332,65 @@ void parallelGraphicsEngine() {
 
     // [7.2] Optimization loop which stores the required static values into sequential arrays, in order
     // to prevent repeated strided retrievals, which allows for easier auto-vectorization.
-    float satelliteIdentifierRed[SATELLITE_COUNT];
-    float satelliteIdentifierGreen[SATELLITE_COUNT];
-    float satelliteIdentifierBlue[SATELLITE_COUNT];
+
     float satellitePositionX[SATELLITE_COUNT];
     float satellitePositionY[SATELLITE_COUNT];
     for (int j = 0; j < SATELLITE_COUNT; ++j) {
-        satelliteIdentifierRed[j] = satellites[j].identifier.red;
-        satelliteIdentifierGreen[j] = satellites[j].identifier.green;
-        satelliteIdentifierBlue[j] = satellites[j].identifier.blue;
         satellitePositionX[j] = satellites[j].position.x;
         satellitePositionY[j] = satellites[j].position.y;
     }
 
-    // Graphics pixel loop - iterates over each pixel in order to calculate its color.
-    for (int i = 0; i < SIZE; ++i) {
-        floatvector pixel = {.x = i % WINDOW_WIDTH, .y = i / WINDOW_WIDTH}; // Row wise ordering
+    // Allocating and writing to the buffers on the device
+    err = clEnqueueWriteBuffer(queue, satPosXBuffer, CL_TRUE, 0,
+        SATELLITE_COUNT * sizeof(float), satellitePositionX, 0, NULL, NULL);
+    CHECK(err, "buffer satPosX");
+    err = clEnqueueWriteBuffer(queue, satPosYBuffer, CL_TRUE, 0,
+        SATELLITE_COUNT * sizeof(float), satellitePositionY, 0, NULL, NULL);
+    CHECK(err, "buffer satPosY");
 
-        // Draw the black hole
-        floatvector positionToBlackHole = {.x = pixel.x - tmpMousePosX, .y = pixel.y - tmpMousePosY};
-        float distToBlackHoleSquared =
-                positionToBlackHole.x * positionToBlackHole.x +
-                positionToBlackHole.y * positionToBlackHole.y;
-        if (distToBlackHoleSquared < BLACK_HOLE_RADIUS * BLACK_HOLE_RADIUS) {
-            pixels[i].red = 0;
-            pixels[i].green = 0;
-            pixels[i].blue = 0;
-            continue; // Black hole drawing done
-        }
+    // Setting additional args
+    err = clSetKernelArg(kernel, 6, sizeof(int), &tmpMousePosX);
+    CHECK(err, "set arg 6");
+    err = clSetKernelArg(kernel, 7, sizeof(int), &tmpMousePosY);
+    CHECK(err, "set arg 7");
 
-        color_f32 renderColor = {.red = 0.f, .green = 0.f, .blue = 0.f}; // This color is used for coloring the pixel
+    // Enqueuing kernel execution
+    size_t global[2] = { WINDOW_WIDTH, WINDOW_HEIGHT };
+    size_t local[2] = { LOCAL_GROUP_DIM_SIZE_X, LOCAL_GROUP_DIM_SIZE_Y };
+    err = clEnqueueNDRangeKernel(queue, kernel, 2, NULL, global, local,
+        0, NULL, NULL);
+    CHECK(err, "enqueueNDRangeKernel");
 
-        // [7.2] Optimization loop, which calculates the distances from the pixel to each satellite in order to
-        // save on the costly sqrt() function and potential duplicate calculation.
-        // [7.2.1] Moved weight computation to a better vectorized loop, which has no conditional branches.
-        float squaredDistances[SATELLITE_COUNT];
-        float computedWeights[SATELLITE_COUNT];
-        float weights = 0.f;
-        for (int j = 0; j < SATELLITE_COUNT; ++j) {
-            floatvector difference = {
-                .x = pixel.x - satellitePositionX[j],
-                .y = pixel.y - satellitePositionY[j]
-            };
-            float distanceSquared = (difference.x * difference.x + difference.y * difference.y);
-            squaredDistances[j] = distanceSquared;
-            computedWeights[j] = 1.0f / (distanceSquared * distanceSquared);
-            weights += computedWeights[j];
-        }
-
-        float shortestSquaredDistance = INFINITY; // For finding the closest satellite to the current pixel.
-        int closestSatelliteIndex = 0;
-
-        // First Graphics satellite loop: Finding the closest satellite to the current pixel.
-        // [7.2.1] Reduced the scope of the loop. Now it is only responsible for finding the closest
-        // satellite instead of also deciding on its color. This was done, because we know that if
-        // the pixel is within any satellite - it will be the closest one, thus we know that its color
-        // will be white. This comes at the occasional cost of unnecessarily computing weights, but
-        // given the amount of pixels which need them is vastly larger, the better vectorized loop
-        // offers some performance benefit - graphics frame times reduced from 151ms to 113ms (-O2 -ffast-math).
-        for (int j = 0; j < SATELLITE_COUNT; ++j) {
-            float squaredDistance = squaredDistances[j];
-
-            int closerThanClosest = squaredDistance < shortestSquaredDistance;
-            shortestSquaredDistance = closerThanClosest ? squaredDistance : shortestSquaredDistance;
-            closestSatelliteIndex = closerThanClosest ? j : closestSatelliteIndex;
-        }
-
-        // If the pixel is within the satellite, it is painted white.
-        if (shortestSquaredDistance < SATELLITE_RADIUS * SATELLITE_RADIUS) {
-            renderColor.red = 1.0f;
-            renderColor.green = 1.0f;
-            renderColor.blue = 1.0f;
-        } else // Else, the color is computed based on the satellites identifier.
-        {
-            renderColor.red = satelliteIdentifierRed[closestSatelliteIndex];
-            renderColor.green = satelliteIdentifierGreen[closestSatelliteIndex];
-            renderColor.blue = satelliteIdentifierBlue[closestSatelliteIndex];
-
-            // Second graphics loop: Calculate the color based on the distance to every satellite. [pg-1]
-            for (int k = 0; k < SATELLITE_COUNT; ++k) {
-                float weight = computedWeights[k];
-
-                renderColor.red += (satelliteIdentifierRed[k] * weight / weights) * 3.0f;
-                renderColor.green += (satelliteIdentifierGreen[k] * weight / weights) * 3.0f;
-                renderColor.blue += (satelliteIdentifierBlue[k] * weight / weights) * 3.0f;
-            }
-        }
-
-        pixels[i].red = (uint8_t) (renderColor.red * 255.0f);
-        pixels[i].green = (uint8_t) (renderColor.green * 255.0f);
-        pixels[i].blue = (uint8_t) (renderColor.blue * 255.0f);
-    }
+    // Reading back the results
+    err = clEnqueueReadBuffer(queue, pixelsBuffer, CL_TRUE, 0, SIZE * sizeof(color_u8), pixels,
+        0, NULL, NULL);
+    CHECK(err, "buffer pixels");
 }
 
 // ## You may add your own destrcution routines here ##
 void destroy() {
+    err = clFinish(queue);
+    CHECK(err, "finish");
+    err = clReleaseContext(context);
+    CHECK(err, "release context");
+    err = clReleaseKernel(kernel);
+    CHECK(err, "release kernel");
+    err = clReleaseProgram(program);
+    CHECK(err, "release program");
+    err = clReleaseCommandQueue(queue);
+    CHECK(err, "release command queue");
+    err = clReleaseMemObject(pixelsBuffer);
+    CHECK(err, "release buffer pixels");
+    err = clReleaseMemObject(satPosXBuffer);
+    CHECK(err, "release buffer satPosX");
+    err = clReleaseMemObject(satPosYBuffer);
+    CHECK(err, "release buffer satPosY");
+    err = clReleaseMemObject(satIdRedBuffer);
+    CHECK(err, "release buffer satIdRed");
+    err = clReleaseMemObject(satIdGreenBuffer);
+    CHECK(err, "release buffer satIdGreen");
+    err = clReleaseMemObject(satIdBlueBuffer);
+    CHECK(err, "release buffer satIdBlue");
 }
 
 
